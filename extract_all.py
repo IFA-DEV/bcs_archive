@@ -6,10 +6,15 @@ import shutil #for file management, copy file
 
 import argparse
 
+import numpy as np
+from matplotlib import pyplot as plt
+
 import rospy
 import cv2 as cv
 from sensor_msgs.msg import Image
 from cv_bridge import CvBridge, CvBridgeError
+
+### From https://gist.github.com/marc-hanheide/4c35796e6a7cd0042dca274bf9e5e9f5
 
 #verify correct input arguments: 1 or 2
 if (len(sys.argv) > 2):
@@ -33,9 +38,11 @@ else:
 	print("bad argument(s): " + str(sys.argv))	#shouldnt really come up
 	sys.exit(1)
 
+#known topic namese for RGB and DEPTH images
 listOfImages = ["/realsense/color/image_raw", "/realsense_right/color/image_raw"]
+listOfDepth = ["/realsense/depth/image_rect_raw", "/realsense_right/depth/image_rect_raw"]
 
-#known list of image topics and unnecessary/large topics
+#known list of unwanted image topics and unnecessary/large topics
 unwantedTopics = ["/realsense/color/image_raw", 
 				"/realsense/color/image_raw/compressed", 
 				"/realsense/depth/image_rect_raw", 
@@ -68,15 +75,18 @@ for bagFile in listOfBagFiles:
     
 	#get list of topics from the bag
 	listOfTopics = []
+	print("\ntopics to save as csv:")
 	for topic, msg, t in bagContents:
 		if (topic not in listOfTopics) and (topic not in unwantedTopics):
 			listOfTopics.append(topic)
 			print(topic)
+	print('')
 
+	### TOPIC EXTRACTOR
+	#write topic info to csv file
 	for topicName in listOfTopics:
 		#Create a new CSV file for each topic
 		filename = folder + '/' + string.replace(topicName, '/', '-') + '.csv'
-		print(filename)
 		with open(filename, 'w+') as csvfile:
 			filewriter = csv.writer(csvfile, delimiter = ',')
 			firstIteration = True	#allows header row
@@ -104,56 +114,53 @@ for bagFile in listOfBagFiles:
 					if len(pair) > 1:
 						values.append(pair[1])
 				filewriter.writerow(values)
-	
+		print("wrote {}".format(filename))
+	print('')
 
-	bag = rosbag.Bag(bagFile, 'r')
-	bagContents = bag.read_messages(topics = listOfImages)
-	bagName = bag.filename
+	### IMAGE EXTRACTOR
+	bagContents = bag.read_messages(topics = (listOfDepth + listOfImages))
 	bridge = CvBridge()
-
 
 	for topic, msg, t in bagContents:
 		top = string.replace(topic, '/', '-')
+		imFolder = folder + '/' + top
+		metaFile = imFolder + '/' + (string.replace(folder, '/', '-') + '_' + top + '_list.csv')
 
-		metaDir = folder + '/' + top
-		metaFile = folder + '/' + top + '/' + (string.replace(folder, '/', '-') + '_' + top + '_list.csv')
-		# metaFile = folder + 'list.csv'
-		print(metaFile)
-		try:
+		try: #make folder if none exists
 			os.makedirs(os.path.join(folder, top))
+			print("saving {} in {}".format(topic, imFolder))
 		except:
 			pass
 
 		openMetaFile = open(metaFile,'ab')
-
 
 		with openMetaFile as f:
 			thewriter = csv.writer(f)
 			if os.path.getsize(metaFile) == 0:
 				thewriter.writerow(['topic', 'seqno','timeStamp','fileName'] )
 
-			file = string.replace(folder, '/', '-') + '_' + top + '_' + str(msg.header.stamp) + '.jpeg'
+			if listOfImages.__contains__(topic):
+				file = string.replace(folder, '/', '-') + '_' + top + '_' + str(msg.header.stamp) + '.jpeg'
+			else:
+				file = string.replace(folder, '/', '-') + '_' + top + '_' + str(msg.header.stamp) + '.npy'
+			
 			thewriter.writerow([str(topic), str(msg.header.seq), str(msg.header.stamp), file])   
 
-			imFolder = folder + '/' + top
-
-
-			try:	#else already exists
-				os.makedirs(imFolder)
-			except:
-				pass
-			
-			try: 
-				cv_img = bridge.imgmsg_to_cv2(msg, desired_encoding="passthrough")
-				# path = r"/%s", top
-				ret = cv.imwrite(os.path.join(imFolder, file), cv_img)
-				if ret:
-					pr = 'Wrote image ' + file + ' in ' + imFolder
-					print(pr)
+			try: 	
+				if listOfImages.__contains__(topic):
+					cv_img = bridge.imgmsg_to_cv2(msg,msg.encoding)
+					cv.imwrite(os.path.join(imFolder, file), cv_img)
+				else: # FROM https://github.com/nihalsoans91/Bag_to_Depth/blob/master/src/bag2rgbdepth/scripts/grabdepth.py
+					cv_image = bridge.imgmsg_to_cv2(msg,msg.encoding)
+					numpy_image= np.array(cv_image,dtype=np.uint8)
+					np.save(os.path.join(imFolder, file), numpy_image)
+				# pr = 'wrote image ' + file + ' in ' + imFolder
+				# print(pr)
 			except CvBridgeError:
 				print(CvBridgeError)
+	print('')
 	bag.close()
-
-print("Done reading all " + numberOfFiles + " bag files.")
+	
+print("done reading all " + numberOfFiles + " bag files.")
 
 # os.remove(bagFile)
